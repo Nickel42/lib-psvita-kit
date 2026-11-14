@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
-using LibPsVitaKit.Licenses;
 using LibPsVitaKit.Pkg;
 using Xunit;
 
@@ -96,7 +95,4 @@ public sealed class DetectTests : IDisposable
         Assert.Throws<VitaFormatException>(() => PkgHeader.Parse(FakePkgHeader().AsSpan(0, 0x40)));
         Assert.Throws<VitaFormatException>(() => PkgHeader.Parse(new byte[PkgHeader.ReadSize]));
     }
-
-    [Fact]
-    public void Zrif_IsNotImplementedYet() => Assert.Throws<NotImplementedException>(() => Zrif.Decode("KO5ifR1dQ+eHBlc2..."));
 }

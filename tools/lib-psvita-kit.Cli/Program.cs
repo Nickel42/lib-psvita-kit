@@ -1,5 +1,6 @@
 // psvita-kit: inspect PS Vita files. Conversions are added here as the library gains them.
 using LibPsVitaKit;
+using LibPsVitaKit.Licenses;
 using LibPsVitaKit.Sfo;
 
 const string Usage = """
@@ -7,6 +8,7 @@ const string Usage = """
 
       info <file-or-folder>   What a .pkg, .vpk, NoNpDrm folder or zip, or param.sfo is, and its IDs
       sfo <param.sfo>         Every key in a param.sfo
+      zrif <zRIF> [work.bin]  The content ID a zRIF is for; with a path, write its RIF there
       --help                  This text
     """;
 
@@ -32,6 +34,16 @@ try
         case "sfo" when args.Length == 2:
             foreach (var (key, entry) in SfoFile.Load(args[1]).Entries.OrderBy(e => e.Key, StringComparer.Ordinal))
                 Console.WriteLine($"{key,-24} {entry}");
+            return 0;
+        case "zrif" when args.Length is 2 or 3:
+            var rif = Zrif.Decode(args[1]);
+            Console.WriteLine($"Content ID:  {Zrif.ContentIdOf(rif)}");
+            Console.WriteLine($"RIF:         {rif.Length} bytes ({(rif.Length == Zrif.PsmRifSize ? "PSM" : "Vita")})");
+            if (args.Length == 3)
+            {
+                File.WriteAllBytes(args[2], rif);
+                Console.WriteLine($"Wrote {args[2]}");
+            }
             return 0;
         default:
             Console.Error.WriteLine(Usage);

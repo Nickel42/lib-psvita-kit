@@ -22,7 +22,8 @@ What the kit does and the order it gets there. The kit is meant for any .NET app
 ## Milestones
 
 1. **Done: scaffold.** `SfoFile` (read/write), `TitleId`/`ContentId`, `PkgHeader`, `VitaFile.Detect`/`Inspect`, the `psvita-kit info` and `sfo` commands, tests built from synthetic files.
-2. **zRIF.** `Zrif.Decode`/`Encode`. .NET's `ZLibStream` takes no preset dictionary; one route is to put the dictionary in a stored deflate block in front of the stream body and drop that many bytes from the output. Test against known zRIF ↔ work.bin pairs.
+2. **Done: zRIF decoding.** `Zrif.Decode`, `TryDecode` and `ContentIdOf`. .NET's inflater takes no preset dictionary, so the dictionary goes in front of the stream body as a stored deflate block and is dropped from the output. Checks follow pkg2zip: header, deflate method, dictionary ID `0x627D1D5D`, Adler-32 (allowing the zero padding rif2zrif.py adds), size 512 (Vita) or 1024 (PSM). Tested against strings Python's zlib makes from made-up RIFs (`reference/python/gen_zrif_vectors.py`).
+   **Still to do: `Zrif.Encode`.** Compressing against a preset dictionary needs a small deflate encoder of the kit's own (for example, LZ77 over dictionary + RIF with fixed Huffman codes). The result would decode the same, but its bytes would differ from rif2zrif.py's. Only needed to turn a `work.bin` into a zRIF.
 3. **PKG → NoNpDrm folder.** Metadata (content type: game, DLC, update, theme), item table, AES-CTR body decryption, writing the tree and `work.bin`, checking the RIF's content ID against the package. Streaming, with progress and cancellation; temporary output named `*.lib-psvita-kit.tmp` until it completes.
 4. **Folder ↔ zip and `.vpk`.** Packing with `System.IO.Compression` and unpacking with path checks (no `..` or absolute entries).
 5. **Verification.** Check a package's SHA-1/SHA-256 digests; report what a folder is missing (for example, no `work.bin`).
@@ -30,5 +31,5 @@ What the kit does and the order it gets there. The kit is meant for any .NET app
 ## Open decisions
 
 - **Package keys.** pkg2zip compiles the PS Vita package keys into its source. Decide whether the kit does the same or takes them from the caller, as lib-3ds-kit does with `aes_keys.txt`.
-- **Reference implementation.** pkg2zip is the reference for milestones 2 and 3. Check its license before porting code, and list it in `THIRD_PARTY_NOTICES.md` if any is used.
+- **Reference implementation.** pkg2zip (public domain, Unlicense) is the reference for milestone 3. Its zRIF dictionary is already used and credited in `THIRD_PARTY_NOTICES.md`.
 - **Test data.** Real packages can't be committed. Plan a small generator for synthetic `.pkg` files encrypted with test keys, as lib-3ds-kit has for its fixtures.
