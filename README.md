@@ -1,8 +1,8 @@
 # lib-psvita-kit
 
-A pure C# library for inspecting and converting PlayStation Vita files in any .NET app. It reads and writes `param.sfo`, recognises `.pkg`, `.vpk`, NoNpDrm game folders and the zips Vita3K installs, reads title and content IDs, and decodes zRIF licenses to `work.bin`. Unpacking a `.pkg` with its zRIF license into a NoNpDrm folder is next. No native code, no keys or licenses bundled, no dependencies.
+A pure C# library for inspecting and converting PlayStation Vita files in any .NET app. It reads and writes `param.sfo`, recognises `.pkg`, `.vpk`, NoNpDrm game folders and the zips Vita3K installs, reads title and content IDs, decodes zRIF licenses, and unpacks PS Vita `.pkg` files (games, DLC, updates and PSM titles) into NoNpDrm folders, the same output as `pkg2zip -x`. No native code, no keys or licenses bundled, no dependencies.
 
-> **Status: early.** Inspection, `param.sfo` and zRIF decoding work. zRIF encoding and the conversions are stubs that throw `NotImplementedException`. See [docs/SPEC.md](docs/SPEC.md) for the plan.
+> **Status: early.** Tested on synthetic packages only so far. zRIF encoding and folder ↔ zip/`.vpk` are still to come. See [docs/SPEC.md](docs/SPEC.md) for the plan.
 
 | Package | What it is |
 |---|---|
@@ -26,7 +26,7 @@ dotnet tool install -g lib-psvita-kit.Cli
 
 | Input | Recognise | Read IDs | Convert |
 |---|---|---|---|
-| `.pkg` (PlayStation Store package) | ✓ | content ID, title ID (header) | → NoNpDrm folder: planned |
+| `.pkg` (PlayStation Store package) | ✓ | title, content ID, title ID, kind (no keys needed) | → NoNpDrm folder ✓ (Vita game, DLC, update, PSM; not PSP or PS1) |
 | NoNpDrm folder (`sce_sys/param.sfo`) | ✓ | from `param.sfo` | → `.vpk` / zip: planned |
 | Zip of a NoNpDrm folder (`TITLEID/…` or `app/TITLEID/…`) | ✓ | from `param.sfo` | → folder: planned |
 | `.vpk` (homebrew installer) | ✓ | from `param.sfo` | → folder: planned |
@@ -37,7 +37,9 @@ dotnet tool install -g lib-psvita-kit.Cli
 
 ```csharp
 using LibPsVitaKit;
+using LibPsVitaKit.Keys;
 using LibPsVitaKit.Licenses;
+using LibPsVitaKit.Operations;
 using LibPsVitaKit.Sfo;
 
 // What is it? Reads headers only.
@@ -53,9 +55,28 @@ sfo.Save("param.sfo");
 byte[] rif = Zrif.Decode(zrif);                   // VitaFormatException if it's corrupt
 if (Zrif.ContentIdOf(rif) != info.ContentId) { /* the license is for another package */ }
 File.WriteAllBytes("sce_sys/package/work.bin", rif);
+
+// .pkg + zRIF → NoNpDrm folder: <output>/app/PCSE00000 (or addcont/…, patch/…, psm/…).
+var converter = new VitaConverter(PkgKeys.Load("pkg-keys.txt"));
+VitaOperationResult result = await converter.ExtractPkgAsync("game.pkg", zrif, outputFolder,
+    new VitaConvertOptions { Overwrite = false }, progress);
+Console.WriteLine($"{result.Kind} → {result.OutputPath}, licensed: {result.Licensed}");
+foreach (var w in result.Warnings) Console.WriteLine(w); // e.g. no zRIF given, so no work.bin
 ```
 
-Errors: `VitaFormatException` for a file or zRIF that isn't valid, and `MissingLicenseException` (once conversions land) for a missing or wrong zRIF.
+Errors: `VitaFormatException` for a file or zRIF that isn't valid, `MissingKeyException` when the package's key isn't loaded, and `MissingLicenseException` when the zRIF is for another package. The folder is built under a temporary name and only renamed into place once it's complete, so a failure or cancellation leaves nothing half-written.
+
+## Keys
+
+The library ships no keys. Packages are encrypted with one of three PS Vita package keys (key type 2, 3 or 4 in the header). Give them to `PkgKeys.Set`, or load a text file with `PkgKeys.Load`:
+
+```text
+pkg_vita_2 = <32 hex digits>
+pkg_vita_3 = <32 hex digits>
+pkg_vita_4 = <32 hex digits>
+```
+
+Reading a package's title, IDs and kind (`VitaFile.Inspect`, `PkgFile.Open`) needs no keys.
 
 ## Command line
 
@@ -63,6 +84,8 @@ Errors: `VitaFormatException` for a file or zRIF that isn't valid, and `MissingL
 psvita-kit info <file-or-folder>   What it is, and its title, title ID and content ID
 psvita-kit sfo <param.sfo>         Every key in a param.sfo
 psvita-kit zrif <zRIF> [work.bin]  The content ID a zRIF is for; with a path, write its RIF there
+psvita-kit extract --keys <file> [--overwrite] <game.pkg> <output-folder> [zRIF]
+                                   Unpack a Vita .pkg as a NoNpDrm folder
 ```
 
 ## Build and test

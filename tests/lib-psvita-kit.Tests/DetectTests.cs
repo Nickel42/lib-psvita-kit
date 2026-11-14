@@ -44,8 +44,8 @@ public sealed class DetectTests : IDisposable
         Assert.Equal(0x2000ul, h.DataOffset);
         Assert.Equal(0xAB, h.Iv[0]);
         Assert.Equal(2, h.KeyType);
-        var info = VitaFile.Inspect(path);
-        Assert.Equal("PCSE00000", info.TitleId);
+        // Only a header: Inspect, which reads the metadata too, refuses it.
+        Assert.Throws<VitaFormatException>(() => VitaFile.Inspect(path));
     }
 
     [Fact]

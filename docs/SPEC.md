@@ -24,12 +24,18 @@ What the kit does and the order it gets there. The kit is meant for any .NET app
 1. **Done: scaffold.** `SfoFile` (read/write), `TitleId`/`ContentId`, `PkgHeader`, `VitaFile.Detect`/`Inspect`, the `psvita-kit info` and `sfo` commands, tests built from synthetic files.
 2. **Done: zRIF decoding.** `Zrif.Decode`, `TryDecode` and `ContentIdOf`. .NET's inflater takes no preset dictionary, so the dictionary goes in front of the stream body as a stored deflate block and is dropped from the output. Checks follow pkg2zip: header, deflate method, dictionary ID `0x627D1D5D`, Adler-32 (allowing the zero padding rif2zrif.py adds), size 512 (Vita) or 1024 (PSM). Tested against strings Python's zlib makes from made-up RIFs (`reference/python/gen_zrif_vectors.py`).
    **Still to do: `Zrif.Encode`.** Compressing against a preset dictionary needs a small deflate encoder of the kit's own (for example, LZ77 over dictionary + RIF with fixed Huffman codes). The result would decode the same, but its bytes would differ from rif2zrif.py's. Only needed to turn a `work.bin` into a zRIF.
-3. **PKG → NoNpDrm folder.** Metadata (content type: game, DLC, update, theme), item table, AES-CTR body decryption, writing the tree and `work.bin`, checking the RIF's content ID against the package. Streaming, with progress and cancellation; temporary output named `*.lib-psvita-kit.tmp` until it completes.
+3. **Done: PKG → NoNpDrm folder.** `PkgFile` reads the metadata (content type 0x15 game, 0x16 DLC, 0x18/0x1D PSM; category `gp` makes a game an update) and the unencrypted `param.sfo` copy without keys. `VitaConverter.ExtractPkgAsync` decrypts the item table, names and files (AES-128-CTR; content key = AES-ECB of the IV under `pkg_vita_N`) and writes the same tree as `pkg2zip -x`:
+   - `app/TITLEID`, `addcont/TITLEID/LABEL`, `patch/TITLEID`, `psm/TITLEID`;
+   - `digs.bin` kept unencrypted as `sce_sys/package/body.bin`; `head.bin` (file start to the end of the item table), `tail.bin` (after the encrypted data), `stat.bin` (768 zero bytes), and `work.bin` from the zRIF;
+   - PSM: `content/` → `RO/`, `RO/License/FAKE.rif`, `RW/Documents`, `RW/Temp`, `RW/System/content_id` and `pm.dat`.
+
+   The zRIF must match the package's content ID (`MissingLicenseException` otherwise); updates need none. Item names are checked as safe relative paths. Output goes to `<root>.lib-psvita-kit.tmp` and is renamed when complete. PSP and PS1 packages are recognised but not unpacked.
+   **Tested against** synthetic packages (`tests/…/PkgBuilder.cs`), encrypted by a separate reference CTR. Not yet checked against real packages or against pkg2zip's own output.
 4. **Folder ↔ zip and `.vpk`.** Packing with `System.IO.Compression` and unpacking with path checks (no `..` or absolute entries).
 5. **Verification.** Check a package's SHA-1/SHA-256 digests; report what a folder is missing (for example, no `work.bin`).
 
 ## Open decisions
 
-- **Package keys.** pkg2zip compiles the PS Vita package keys into its source. Decide whether the kit does the same or takes them from the caller, as lib-3ds-kit does with `aes_keys.txt`.
+- **Package keys.** For now the caller supplies them (`PkgKeys`), as lib-3ds-kit does with `aes_keys.txt`. pkg2zip compiles them into its source instead; bundling them would be a one-line default in `PkgKeys`.
 - **Reference implementation.** pkg2zip (public domain, Unlicense) is the reference for milestone 3. Its zRIF dictionary is already used and credited in `THIRD_PARTY_NOTICES.md`.
-- **Test data.** Real packages can't be committed. Plan a small generator for synthetic `.pkg` files encrypted with test keys, as lib-3ds-kit has for its fixtures.
+- **Test data.** Real packages can't be committed; `PkgBuilder` in the tests makes synthetic ones with made-up keys. A useful extra check: build pkg2zip with the test key swapped in and compare its `-x` output with the kit's on the same synthetic package.

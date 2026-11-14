@@ -22,7 +22,11 @@ public enum VitaFileType
 }
 
 /// <summary>What <see cref="VitaFile.Inspect"/> found. Fields the file doesn't hold are null.</summary>
-public sealed record VitaFileInfo(VitaFileType Type, string? Title, string? TitleId, string? ContentId, string? Category, string? AppVersion);
+public sealed record VitaFileInfo(VitaFileType Type, string? Title, string? TitleId, string? ContentId, string? Category, string? AppVersion)
+{
+    /// <summary>For a .pkg: game, DLC, update, PSM, or a PSP/PS1 package.</summary>
+    public PkgContentKind? PkgKind { get; init; }
+}
 
 /// <summary>Recognising PS Vita files and reading their identity, from headers only.</summary>
 public static class VitaFile
@@ -51,8 +55,8 @@ public static class VitaFile
         switch (type)
         {
             case VitaFileType.Pkg:
-                var contentId = PkgHeader.Read(path).ContentId;
-                return new(type, null, Ids.ContentId.TryParse(contentId, out var c) ? c.TitleId.Value : null, contentId, null, null);
+                var pkg = PkgFile.Open(path); // the metadata's param.sfo copy is unencrypted: no keys needed
+                return new(type, pkg.Title, pkg.TitleId, pkg.ContentId, pkg.Sfo?.Category, pkg.Sfo?.AppVersion) { PkgKind = pkg.Kind };
             case VitaFileType.Sfo:
                 return FromSfo(type, SfoFile.Load(path));
             case VitaFileType.NoNpDrmFolder:
