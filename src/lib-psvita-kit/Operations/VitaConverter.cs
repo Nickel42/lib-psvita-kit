@@ -32,6 +32,9 @@ public sealed record VitaOperationResult(string OutputPath, VitaFileType OutputT
 /// </summary>
 public sealed class VitaConverter(PkgKeys keys)
 {
+    /// <summary>A converter with the built-in package keys (<see cref="PkgKeys.BuiltIn"/>).</summary>
+    public VitaConverter() : this(PkgKeys.BuiltIn()) { }
+
     private const string TempSuffix = ".lib-psvita-kit.tmp";
     private const int ChunkSize = 1 << 20;
 

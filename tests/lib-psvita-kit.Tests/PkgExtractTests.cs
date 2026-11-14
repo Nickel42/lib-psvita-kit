@@ -239,6 +239,27 @@ public sealed class PkgExtractTests : IDisposable
         Assert.Throws<FormatException>(() => PkgKeys.Parse("pkg_vita_3 = 1234"));
     }
 
+    [Fact]
+    public void BuiltInKeys_CoverEveryVitaKeyType()
+    {
+        var keys = PkgKeys.BuiltIn();
+        Assert.All(PkgKeys.KeyNames.Keys, type => Assert.True(keys.Has(type)));
+    }
+
+    [Fact]
+    public async Task KeyFile_OverridesTheBuiltInKeys()
+    {
+        // The synthetic package uses a made-up key 2, so the built-in key 2 can't open it until a file overrides it.
+        var pkg = Game().BuildTo(Path.Combine(_dir, "game.pkg"));
+        await Assert.ThrowsAsync<VitaFormatException>(() => new VitaConverter().ExtractPkgAsync(pkg, null, Out));
+        var keyFile = Path.Combine(_dir, "keys.txt");
+        File.WriteAllText(keyFile, $"pkg_vita_2 = {Convert.ToHexString(PkgBuilder.TestKeys[0])}\n");
+        var keys = PkgKeys.BuiltInWith(keyFile);
+        Assert.True(keys.Has(3) && keys.Has(4));
+        var result = await new VitaConverter(keys).ExtractPkgAsync(pkg, null, Out);
+        Assert.True(File.Exists(Path.Combine(result.OutputPath, "eboot.bin")));
+    }
+
     /// <summary>Progress&lt;T&gt; posts to the thread pool; this reports in line, so cancelling is deterministic.</summary>
     private sealed class SyncProgress(Action<OperationProgress> report) : IProgress<OperationProgress>
     {

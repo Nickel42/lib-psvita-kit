@@ -36,6 +36,6 @@ What the kit does and the order it gets there. The kit is meant for any .NET app
 
 ## Open decisions
 
-- **Package keys.** For now the caller supplies them (`PkgKeys`), as lib-3ds-kit does with `aes_keys.txt`. pkg2zip compiles them into its source instead; bundling them would be a one-line default in `PkgKeys`.
+- **Package keys: decided.** Built in, as pkg2zip does (`PkgKeys.BuiltIn`, used by `new VitaConverter()`); callers can still supply or override them. Decided by the owner on 2026-11-13, knowing that publishing keys carries anti-circumvention risk (DMCA §1201 and similar laws) that a caller-supplied design avoids.
 - **Reference implementation.** pkg2zip (public domain, Unlicense) is the reference for milestone 3. Its zRIF dictionary is already used and credited in `THIRD_PARTY_NOTICES.md`.
 - **Test data.** Real packages can't be committed; `PkgBuilder` in the tests makes synthetic ones with made-up keys. A useful extra check: build pkg2zip with the test key swapped in and compare its `-x` output with the kit's on the same synthetic package.

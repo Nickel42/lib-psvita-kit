@@ -11,9 +11,10 @@ const string Usage = """
       info <file-or-folder>   What a .pkg, .vpk, NoNpDrm folder or zip, or param.sfo is, and its IDs
       sfo <param.sfo>         Every key in a param.sfo
       zrif <zRIF> [work.bin]  The content ID a zRIF is for; with a path, write its RIF there
-      extract --keys <file> [--overwrite] <game.pkg> <output-folder> [zRIF]
+      extract [--keys <file>] [--overwrite] <game.pkg> <output-folder> [zRIF]
                               Unpack a Vita .pkg as a NoNpDrm folder (app/, addcont/, patch/ or psm/
-                              under the output folder). The key file holds pkg_vita_2/3/4 = <hex>.
+                              under the output folder). The package keys are built in; a key file
+                              (pkg_vita_2/3/4 = <hex>) overrides them.
       --help                  This text
     """;
 
@@ -75,12 +76,12 @@ async Task<int> Extract(string[] rest)
         else if (rest[i] == "--overwrite") overwrite = true;
         else positional.Add(rest[i]);
     }
-    if (keyFile is null || positional.Count is not (2 or 3))
+    if (positional.Count is not (2 or 3))
     {
         Console.Error.WriteLine(Usage);
         return 1;
     }
-    var converter = new VitaConverter(PkgKeys.Load(keyFile));
+    var converter = new VitaConverter(keyFile is null ? PkgKeys.BuiltIn() : PkgKeys.BuiltInWith(keyFile));
     var progress = new Progress<OperationProgress>(p => Console.Write($"\r{p.Stage}: {p.Fraction:P0}   "));
     var result = await converter.ExtractPkgAsync(positional[0], positional.Count == 3 ? positional[2] : null, positional[1],
         new VitaConvertOptions { Overwrite = overwrite }, progress);

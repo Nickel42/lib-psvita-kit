@@ -1,6 +1,6 @@
 # lib-psvita-kit
 
-A pure C# library for inspecting and converting PlayStation Vita files in any .NET app. It reads and writes `param.sfo`, recognises `.pkg`, `.vpk`, NoNpDrm game folders and the zips Vita3K installs, reads title and content IDs, decodes zRIF licenses, and unpacks PS Vita `.pkg` files (games, DLC, updates and PSM titles) into NoNpDrm folders, the same output as `pkg2zip -x`. No native code, no keys or licenses bundled, no dependencies.
+A pure C# library for inspecting and converting PlayStation Vita files in any .NET app. It reads and writes `param.sfo`, recognises `.pkg`, `.vpk`, NoNpDrm game folders and the zips Vita3K installs, reads title and content IDs, decodes zRIF licenses, and unpacks PS Vita `.pkg` files (games, DLC, updates and PSM titles) into NoNpDrm folders, the same output as `pkg2zip -x`. No native code, no dependencies. The PS Vita package keys are built in; licenses (zRIFs) are not.
 
 > **Status: early.** Tested on synthetic packages only so far. zRIF encoding and folder ↔ zip/`.vpk` are still to come. See [docs/SPEC.md](docs/SPEC.md) for the plan.
 
@@ -57,7 +57,7 @@ if (Zrif.ContentIdOf(rif) != info.ContentId) { /* the license is for another pac
 File.WriteAllBytes("sce_sys/package/work.bin", rif);
 
 // .pkg + zRIF → NoNpDrm folder: <output>/app/PCSE00000 (or addcont/…, patch/…, psm/…).
-var converter = new VitaConverter(PkgKeys.Load("pkg-keys.txt"));
+var converter = new VitaConverter(); // built-in package keys
 VitaOperationResult result = await converter.ExtractPkgAsync("game.pkg", zrif, outputFolder,
     new VitaConvertOptions { Overwrite = false }, progress);
 Console.WriteLine($"{result.Kind} → {result.OutputPath}, licensed: {result.Licensed}");
@@ -68,7 +68,7 @@ Errors: `VitaFormatException` for a file or zRIF that isn't valid, `MissingKeyEx
 
 ## Keys
 
-The library ships no keys. Packages are encrypted with one of three PS Vita package keys (key type 2, 3 or 4 in the header). Give them to `PkgKeys.Set`, or load a text file with `PkgKeys.Load`:
+Packages are encrypted with one of three PS Vita package keys (key type 2, 3 or 4 in the header). All three are built in: `new VitaConverter()` uses them (`PkgKeys.BuiltIn()`). To use other keys, pass your own `PkgKeys` (`Set`, `Load`), or start from the built-in ones and override some with a text file (`PkgKeys.BuiltInWith(path)`):
 
 ```text
 pkg_vita_2 = <32 hex digits>
@@ -84,7 +84,7 @@ Reading a package's title, IDs and kind (`VitaFile.Inspect`, `PkgFile.Open`) nee
 psvita-kit info <file-or-folder>   What it is, and its title, title ID and content ID
 psvita-kit sfo <param.sfo>         Every key in a param.sfo
 psvita-kit zrif <zRIF> [work.bin]  The content ID a zRIF is for; with a path, write its RIF there
-psvita-kit extract --keys <file> [--overwrite] <game.pkg> <output-folder> [zRIF]
+psvita-kit extract [--keys <file>] [--overwrite] <game.pkg> <output-folder> [zRIF]
                                    Unpack a Vita .pkg as a NoNpDrm folder
 ```
 

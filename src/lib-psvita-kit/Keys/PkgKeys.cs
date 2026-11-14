@@ -4,11 +4,28 @@ using LibPsVitaKit.Pkg;
 namespace LibPsVitaKit.Keys;
 
 /// <summary>
-/// The PS Vita package keys, which the kit doesn't ship. A package's header names which one it
-/// uses (key type 2, 3 or 4); its content key is that key's AES-ECB encryption of the package IV.
+/// The PS Vita package keys. A package's header names which one it uses (key type 2, 3 or 4); its
+/// content key is that key's AES-ECB encryption of the package IV. <see cref="BuiltIn"/> has all
+/// three; a caller can still supply or override them.
 /// </summary>
 public sealed class PkgKeys
 {
+    // The public PS Vita package keys, as published on the PS Vita developer wiki and in pkg2zip.
+    private static readonly byte[] VitaKey2 = [0xE3, 0x1A, 0x70, 0xC9, 0xCE, 0x1D, 0xD7, 0x2B, 0xF3, 0xC0, 0x62, 0x29, 0x63, 0xF2, 0xEC, 0xCB];
+    private static readonly byte[] VitaKey3 = [0x42, 0x3A, 0xCA, 0x3A, 0x2B, 0xD5, 0x64, 0x9F, 0x96, 0x86, 0xAB, 0xAD, 0x6F, 0xD8, 0x80, 0x1F];
+    private static readonly byte[] VitaKey4 = [0xAF, 0x07, 0xFD, 0x59, 0x65, 0x25, 0x27, 0xBA, 0xF1, 0x33, 0x89, 0x66, 0x8B, 0x17, 0xD9, 0xEA];
+
+    /// <summary>A new set holding the built-in keys for key types 2, 3 and 4. Later <see cref="Set"/> calls override them.</summary>
+    public static PkgKeys BuiltIn() => new PkgKeys().Set(2, VitaKey2).Set(3, VitaKey3).Set(4, VitaKey4);
+
+    /// <summary>The built-in keys, overridden by any found in a key file (see <see cref="Parse"/>).</summary>
+    public static PkgKeys BuiltInWith(string keyFilePath)
+    {
+        var keys = BuiltIn();
+        foreach (var (type, key) in Load(keyFilePath)._keys) keys.Set(type, key);
+        return keys;
+    }
+
     /// <summary>The names the key file uses, after the PS Vita developer wiki and pkg2zip.</summary>
     public static readonly IReadOnlyDictionary<int, string> KeyNames = new Dictionary<int, string>
     {
