@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>psvita-kit</AssemblyName>
+    <RootNamespace>LibPsVitaKit.Cli</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Installable with `dotnet tool install -g lib-psvita-kit.Cli`. -->
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <PackageId>lib-psvita-kit.Cli</PackageId>
+    <ToolCommandName>psvita-kit</ToolCommandName>
+    <Description>psvita-kit: command-line tool for inspecting and converting PlayStation Vita files, built on lib-psvita-kit.</Description>
+    <PackageTags>psvita;vita;pkg;sfo;nonpdrm;cli;dotnet-tool</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\lib-psvita-kit\lib-psvita-kit.csproj" />
+  </ItemGroup>
+</Project>

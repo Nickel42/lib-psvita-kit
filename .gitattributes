@@ -1,0 +1,12 @@
+# Normalise line endings in text files; check out with the platform's native endings.
+* text=auto
+
+# Test fixtures are compared byte for byte: never touch them.
+tests/fixtures/** -text
+*.pkg    binary
+*.sfo    binary
+*.bin    binary
+*.vpk    binary
+*.zip    binary
+*.nupkg  binary
+*.snupkg binary

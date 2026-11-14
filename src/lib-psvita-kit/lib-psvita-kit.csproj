@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>lib-psvita-kit</AssemblyName>
+    <PackageId>lib-psvita-kit</PackageId>
+    <RootNamespace>LibPsVitaKit</RootNamespace>
+    <Description>Convert and inspect PlayStation Vita files: read and write param.sfo, recognise .pkg, .vpk, NoNpDrm folders and Vita3K zips, read PKG headers and title/content IDs. PKG + zRIF → NoNpDrm folder is planned. Pure managed; bring your own licenses.</Description>
+    <PackageTags>psvita;ps-vita;vita;pkg;zrif;nonpdrm;vpk;sfo;param-sfo;vita3k;rom;convert</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="lib-psvita-kit.Tests" />
+  </ItemGroup>
+</Project>
