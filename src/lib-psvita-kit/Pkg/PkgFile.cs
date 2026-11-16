@@ -33,7 +33,7 @@ public sealed record PkgItem(string Name, ulong NameOffset, ulong DataOffset, ul
 
 /// <summary>
 /// A PlayStation Store package: header, metadata and the unencrypted param.sfo copy. Reading
-/// these needs no keys; the item table and files (<see cref="ReadItems"/>) do.
+/// these needs no keys; the item table and files (<see cref="ReadItems(ReadOnlySpan{byte})"/>) do.
 /// </summary>
 public sealed class PkgFile
 {

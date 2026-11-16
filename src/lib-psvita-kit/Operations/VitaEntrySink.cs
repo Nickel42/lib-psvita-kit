@@ -1,14 +1,20 @@
 namespace LibPsVitaKit.Operations;
 
-/// <summary>Where an extraction puts its files and folders.</summary>
-internal interface IVitaEntrySink
+/// <summary>
+/// Where an extraction puts its files and folders, for writing them somewhere other than a folder
+/// (a zip, say) without a round trip through the disk. Entries come in package order, then the
+/// files pkg2zip adds (head.bin, tail.bin, stat.bin, work.bin; for PSM, RO/License and RW/).
+/// </summary>
+public interface IVitaEntrySink
 {
     /// <summary>A folder, '/'-separated and relative to the game's folder.</summary>
     void CreateFolder(string path);
 
     /// <summary>
     /// A file, '/'-separated and relative to the game's folder, that will get exactly
-    /// <paramref name="length"/> bytes. The extraction writes them and disposes the stream.
+    /// <paramref name="length"/> bytes. The extraction writes them and disposes the stream. Its
+    /// parent folders may not have been passed to <see cref="CreateFolder"/>. A damaged or unusual
+    /// package can name a file twice; the later one should replace the earlier, as in a folder.
     /// </summary>
     Stream CreateFile(string path, long length);
 }

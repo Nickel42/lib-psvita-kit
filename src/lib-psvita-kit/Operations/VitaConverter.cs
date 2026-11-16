@@ -29,7 +29,7 @@ public sealed record VitaOperationResult(string OutputPath, VitaFileType OutputT
 
 /// <summary>
 /// Conversions between PS Vita formats. Done: .pkg (+ zRIF) → NoNpDrm folder, for games, DLC,
-/// updates and PSM titles. Planned (docs/SPEC.md): NoNpDrm folder ↔ .vpk and zip.
+/// updates and PSM titles, written to disk or to an <see cref="IVitaEntrySink"/>. Planned (docs/SPEC.md): NoNpDrm folder ↔ .vpk and zip.
 /// </summary>
 public sealed class VitaConverter(PkgKeys keys)
 {
@@ -83,6 +83,32 @@ public sealed class VitaConverter(PkgKeys keys)
             try { Directory.Delete(temp, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             throw;
         }
+        progress?.Report(new("Done", 1));
+        return new VitaOperationResult(root, VitaFileType.NoNpDrmFolder, warnings)
+        {
+            Kind = pkg.Kind, ContentId = pkg.ContentId, Licensed = rif is not null,
+        };
+    }
+
+    /// <summary>
+    /// Decrypts and unpacks a PS Vita .pkg into <paramref name="sink"/> instead of a folder: the same
+    /// files, with the same bytes, as the folder overloads write, named relative to the game's folder.
+    /// <see cref="VitaOperationResult.OutputPath"/> is that folder's place on a memory card, such as
+    /// <c>app/PCSE00000</c>. If this throws, the sink may hold some of the entries; the caller discards them.
+    /// </summary>
+    /// <param name="zrif">The license. Games, DLC and PSM titles need one to run; updates don't, and it is ignored for them.</param>
+    /// <exception cref="VitaFormatException">Not a Vita package, or damaged.</exception>
+    /// <exception cref="MissingKeyException">The package's key isn't loaded.</exception>
+    /// <exception cref="MissingLicenseException">The zRIF is for another package.</exception>
+    public async Task<VitaOperationResult> ExtractPkgAsync(PkgFile pkg, string? zrif, IVitaEntrySink sink,
+        IProgress<OperationProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pkg);
+        ArgumentNullException.ThrowIfNull(sink);
+        var (rif, key, items, warnings) = Prepare(pkg, zrif);
+        var root = RootFor(pkg).Replace(Path.DirectorySeparatorChar, '/');
+        await WriteItemsAsync(pkg, key, items, sink, progress, cancellationToken);
+        await WriteExtrasAsync(pkg, rif, sink, cancellationToken);
         progress?.Report(new("Done", 1));
         return new VitaOperationResult(root, VitaFileType.NoNpDrmFolder, warnings)
         {

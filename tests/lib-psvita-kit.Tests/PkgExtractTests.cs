@@ -98,6 +98,60 @@ public sealed class PkgExtractTests : IDisposable
         Assert.Equal(b.Tail, File.ReadAllBytes(Path.Combine(result.OutputPath, "sce_sys", "package", "tail.bin")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Sink_GetsTheSameFilesAsTheFolder(bool psmPackage)
+    {
+        PkgBuilder b;
+        string zrif;
+        if (psmPackage)
+        {
+            b = new PkgBuilder { ContentId = PsmId, ContentType = 0x18 };
+            b.Items.Add(("content", null));
+            b.Items.Add(("content/Application", null));
+            b.Items.Add(("content/Application/app.exe", PkgBuilder.Pattern(5000, 4)));
+            zrif = ZrifVectors.PsmZrif;
+        }
+        else
+        {
+            b = Game();
+            b.Items.Add(("data/big.psarc", PkgBuilder.Pattern(2 * (1 << 20) + 17, 8)));
+            zrif = ZrifVectors.VitaZrif;
+        }
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "in.pkg")));
+        var folder = await Converter().ExtractPkgAsync(pkg, zrif, Out);
+        var sink = new MemorySink();
+
+        var result = await Converter().ExtractPkgAsync(pkg, zrif, sink);
+
+        Assert.Equal(Path.GetRelativePath(Out, folder.OutputPath).Replace('\\', '/'), result.OutputPath);
+        Assert.Equal((folder.Kind, folder.ContentId, folder.Licensed), (result.Kind, result.ContentId, result.Licensed));
+        var onDisk = Directory.GetFiles(folder.OutputPath, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(folder.OutputPath, f).Replace('\\', '/'), File.ReadAllBytes);
+        Assert.Equal(onDisk.Keys.Order(), sink.Files.Keys.Order());
+        foreach (var (name, bytes) in onDisk) Assert.Equal(bytes, sink.Files[name].ToArray());
+        foreach (var (name, length) in sink.Lengths) Assert.Equal(length, sink.Files[name].ToArray().Length);
+        var folders = Directory.GetDirectories(folder.OutputPath, "*", SearchOption.AllDirectories)
+            .Select(d => Path.GetRelativePath(folder.OutputPath, d).Replace('\\', '/'))
+            .Where(d => !onDisk.Keys.Any(f => f.StartsWith(d + "/", StringComparison.Ordinal)));
+        Assert.All(folders, d => Assert.Contains(d, sink.Folders)); // empty folders are passed on too
+    }
+
+    /// <summary>Keeps what an extraction writes in memory.</summary>
+    private sealed class MemorySink : IVitaEntrySink
+    {
+        public Dictionary<string, MemoryStream> Files { get; } = [];
+        public Dictionary<string, long> Lengths { get; } = [];
+        public HashSet<string> Folders { get; } = [];
+        public void CreateFolder(string path) => Folders.Add(path);
+        public Stream CreateFile(string path, long length)
+        {
+            Lengths[path] = length;
+            return Files[path] = new MemoryStream();
+        }
+    }
+
     [Fact]
     public async Task Game_WithAnotherGamesZrif_IsRefused_AndLeavesNothing()
     {
