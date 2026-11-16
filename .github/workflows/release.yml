@@ -37,7 +37,8 @@ jobs:
           dotnet-version: 10.0.x
       - name: Version from tag
         shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        # Only a v* tag names the version; a run by hand on a branch builds 0.0.0-dev / "dev" files.
+        run: if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
       - name: Publish self-contained single file
         shell: bash
         run: >
@@ -71,7 +72,8 @@ jobs:
             8.0.x
             10.0.x
       - name: Version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        # Only a v* tag names the version; a run by hand on a branch builds 0.0.0-dev / "dev" files.
+        run: if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
       - name: Test
         run: dotnet test lib-psvita-kit.sln -c Release
       - name: Pack
