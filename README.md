@@ -62,6 +62,11 @@ VitaOperationResult result = await converter.ExtractPkgAsync("game.pkg", zrif, o
     new VitaConvertOptions { Overwrite = false }, progress);
 Console.WriteLine($"{result.Kind} → {result.OutputPath}, licensed: {result.Licensed}");
 foreach (var w in result.Warnings) Console.WriteLine(w); // e.g. no zRIF given, so no work.bin
+
+// Or straight into something else, such as a zip, with no folder on disk: implement IVitaEntrySink
+// (CreateFolder, CreateFile(path, length) → Stream). Paths are relative to the game's folder.
+var pkg = PkgFile.Open("game.pkg");                // an opened package is reused, not read again
+result = await converter.ExtractPkgAsync(pkg, zrif, mySink, progress); // OutputPath: "app/PCSE00000"
 ```
 
 Errors: `VitaFormatException` for a file or zRIF that isn't valid, `MissingKeyException` when the package's key isn't loaded, and `MissingLicenseException` when the zRIF is for another package. The folder is built under a temporary name and only renamed into place once it's complete, so a failure or cancellation leaves nothing half-written.

@@ -3,6 +3,7 @@ using LibPsVitaKit.Crypto;
 using LibPsVitaKit.Keys;
 using LibPsVitaKit.Licenses;
 using LibPsVitaKit.Pkg;
+using Microsoft.Win32.SafeHandles;
 
 namespace LibPsVitaKit.Operations;
 
@@ -28,7 +29,7 @@ public sealed record VitaOperationResult(string OutputPath, VitaFileType OutputT
 
 /// <summary>
 /// Conversions between PS Vita formats. Done: .pkg (+ zRIF) → NoNpDrm folder, for games, DLC,
-/// updates and PSM titles. Planned (docs/SPEC.md): NoNpDrm folder ↔ .vpk and zip.
+/// updates and PSM titles, written to disk or to an <see cref="IVitaEntrySink"/>. Planned (docs/SPEC.md): NoNpDrm folder ↔ .vpk and zip.
 /// </summary>
 public sealed class VitaConverter(PkgKeys keys)
 {
@@ -51,16 +52,18 @@ public sealed class VitaConverter(PkgKeys keys)
     /// <exception cref="IOException">The output exists and <see cref="VitaConvertOptions.Overwrite"/> is off.</exception>
     public async Task<VitaOperationResult> ExtractPkgAsync(string pkgPath, string? zrif, string outputFolder,
         VitaConvertOptions? options = null, IProgress<OperationProgress>? progress = null, CancellationToken cancellationToken = default)
+        => await ExtractPkgAsync(PkgFile.Open(pkgPath), zrif, outputFolder, options, progress, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="ExtractPkgAsync(string, string?, string, VitaConvertOptions?, IProgress{OperationProgress}?, CancellationToken)"/>,
+    /// for a package the caller has already opened, so its header isn't read again.
+    /// </summary>
+    public async Task<VitaOperationResult> ExtractPkgAsync(PkgFile pkg, string? zrif, string outputFolder,
+        VitaConvertOptions? options = null, IProgress<OperationProgress>? progress = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(pkg);
         options ??= new();
-        var pkg = PkgFile.Open(pkgPath);
-        if (!pkg.IsVita) throw new VitaFormatException(pkg.Kind == PkgContentKind.Unknown
-            ? $"Unsupported package content type 0x{pkg.ContentType:X}."
-            : $"{pkg.Kind} packages aren't supported, only PS Vita games, DLC, updates and PSM titles.");
-        var warnings = new List<string>();
-        var rif = License(pkg, zrif, warnings);
-        var key = keys.ContentKey(pkg.Header);
-        var items = pkg.ReadItems(key);
+        var (rif, key, items, warnings) = Prepare(pkg, zrif);
 
         var root = Path.GetFullPath(Path.Combine(outputFolder, RootFor(pkg)));
         if (Directory.Exists(root) && !options.Overwrite) throw new IOException($"{root} already exists.");
@@ -69,8 +72,9 @@ public sealed class VitaConverter(PkgKeys keys)
         Directory.CreateDirectory(temp);
         try
         {
-            await WriteItemsAsync(pkg, key, items, temp, progress, cancellationToken);
-            await WriteExtrasAsync(pkg, rif, temp, cancellationToken);
+            var sink = new FolderSink(temp);
+            await WriteItemsAsync(pkg, key, items, sink, progress, cancellationToken);
+            await WriteExtrasAsync(pkg, rif, sink, cancellationToken);
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
             Directory.Move(temp, root);
         }
@@ -84,6 +88,44 @@ public sealed class VitaConverter(PkgKeys keys)
         {
             Kind = pkg.Kind, ContentId = pkg.ContentId, Licensed = rif is not null,
         };
+    }
+
+    /// <summary>
+    /// Decrypts and unpacks a PS Vita .pkg into <paramref name="sink"/> instead of a folder: the same
+    /// files, with the same bytes, as the folder overloads write, named relative to the game's folder.
+    /// <see cref="VitaOperationResult.OutputPath"/> is that folder's place on a memory card, such as
+    /// <c>app/PCSE00000</c>. If this throws, the sink may hold some of the entries; the caller discards them.
+    /// </summary>
+    /// <param name="zrif">The license. Games, DLC and PSM titles need one to run; updates don't, and it is ignored for them.</param>
+    /// <exception cref="VitaFormatException">Not a Vita package, or damaged.</exception>
+    /// <exception cref="MissingKeyException">The package's key isn't loaded.</exception>
+    /// <exception cref="MissingLicenseException">The zRIF is for another package.</exception>
+    public async Task<VitaOperationResult> ExtractPkgAsync(PkgFile pkg, string? zrif, IVitaEntrySink sink,
+        IProgress<OperationProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pkg);
+        ArgumentNullException.ThrowIfNull(sink);
+        var (rif, key, items, warnings) = Prepare(pkg, zrif);
+        var root = RootFor(pkg).Replace(Path.DirectorySeparatorChar, '/');
+        await WriteItemsAsync(pkg, key, items, sink, progress, cancellationToken);
+        await WriteExtrasAsync(pkg, rif, sink, cancellationToken);
+        progress?.Report(new("Done", 1));
+        return new VitaOperationResult(root, VitaFileType.NoNpDrmFolder, warnings)
+        {
+            Kind = pkg.Kind, ContentId = pkg.ContentId, Licensed = rif is not null,
+        };
+    }
+
+    /// <summary>Checks the package and license and decrypts the item table: everything before the first file is written.</summary>
+    private (byte[]? Rif, byte[] Key, IReadOnlyList<PkgItem> Items, List<string> Warnings) Prepare(PkgFile pkg, string? zrif)
+    {
+        if (!pkg.IsVita) throw new VitaFormatException(pkg.Kind == PkgContentKind.Unknown
+            ? $"Unsupported package content type 0x{pkg.ContentType:X}."
+            : $"{pkg.Kind} packages aren't supported, only PS Vita games, DLC, updates and PSM titles.");
+        var warnings = new List<string>();
+        var rif = License(pkg, zrif, warnings);
+        var key = keys.ContentKey(pkg.Header);
+        return (rif, key, pkg.ReadItems(key), warnings);
     }
 
     /// <summary>The decoded zRIF, checked against the package; null when there is none or it isn't needed.</summary>
@@ -123,12 +165,13 @@ public sealed class VitaConverter(PkgKeys keys)
         };
     }
 
-    private static async Task WriteItemsAsync(PkgFile pkg, byte[] key, IReadOnlyList<PkgItem> items, string root,
+    private static async Task WriteItemsAsync(PkgFile pkg, byte[] key, IReadOnlyList<PkgItem> items, IVitaEntrySink sink,
         IProgress<OperationProgress>? progress, CancellationToken ct)
     {
         using var aes = AesCtr.Create(key);
-        await using var input = new FileStream(pkg.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous);
-        var buffer = new byte[ChunkSize];
+        using var input = File.OpenHandle(pkg.Path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        // Two buffers: the next chunk is read while this one is decrypted and written.
+        byte[][] buffers = [new byte[ChunkSize], new byte[ChunkSize]];
         var total = Math.Max(1.0, items.Where(i => !i.IsFolder).Sum(i => (double)i.DataSize));
         var done = 0.0;
         var psm = pkg.Kind == PkgContentKind.Psm;
@@ -142,10 +185,9 @@ public sealed class VitaConverter(PkgKeys keys)
                 if (!name.StartsWith("content/", StringComparison.Ordinal)) continue;
                 name = "RO/" + name["content/".Length..];
             }
-            var path = Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar));
             if (item.IsFolder)
             {
-                Directory.CreateDirectory(path);
+                sink.CreateFolder(name);
                 continue;
             }
 
@@ -153,72 +195,100 @@ public sealed class VitaConverter(PkgKeys keys)
             var decrypt = true;
             if (!psm && name == "sce_sys/package/digs.bin")
             {
-                path = Path.Combine(root, "sce_sys", "package", "body.bin");
+                name = "sce_sys/package/body.bin";
                 decrypt = false;
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.Asynchronous);
-            var offset = item.DataOffset;
-            var left = item.DataSize;
-            while (left > 0)
+            var length = (long)item.DataSize;
+            var start = (long)(pkg.Header.DataOffset + item.DataOffset);
+            await using var output = sink.CreateFile(name, length);
+            var reading = length > 0 ? ReadExactlyAsync(input, buffers[0].AsMemory(0, (int)Math.Min(length, ChunkSize)), start, ct) : null;
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                var size = (int)Math.Min(left, (ulong)buffer.Length);
-                input.Position = (long)(pkg.Header.DataOffset + offset);
-                await input.ReadExactlyAsync(buffer.AsMemory(0, size), ct);
-                if (decrypt) AesCtr.Xor(aes, pkg.Header.Iv, offset / 16, buffer.AsSpan(0, size));
-                await output.WriteAsync(buffer.AsMemory(0, size), ct);
-                offset += (ulong)size;
-                left -= (ulong)size;
-                done += size;
-                progress?.Report(new("Unpacking", done / total));
+                for (long at = 0, current = 0; at < length; current ^= 1)
+                {
+                    await reading!;
+                    var size = (int)Math.Min(length - at, ChunkSize);
+                    var next = at + size;
+                    reading = next < length
+                        ? ReadExactlyAsync(input, buffers[current ^ 1].AsMemory(0, (int)Math.Min(length - next, ChunkSize)), start + next, ct)
+                        : null;
+                    var chunk = buffers[current].AsMemory(0, size);
+                    if (decrypt) AesCtr.Xor(aes, pkg.Header.Iv, (item.DataOffset + (ulong)at) / 16, chunk.Span);
+                    await output.WriteAsync(chunk, ct);
+                    at = next;
+                    done += size;
+                    progress?.Report(new("Unpacking", done / total));
+                }
             }
+            finally
+            {
+                // Don't leave a read running into a buffer, or on the handle, after a failure.
+                if (reading is not null)
+                {
+                    try { await reading; } catch { }
+                }
+            }
+        }
+    }
+
+    private static async Task ReadExactlyAsync(SafeFileHandle input, Memory<byte> buffer, long offset, CancellationToken ct)
+    {
+        while (!buffer.IsEmpty)
+        {
+            var read = await RandomAccess.ReadAsync(input, buffer, offset, ct);
+            if (read == 0) throw new EndOfStreamException();
+            buffer = buffer[read..];
+            offset += read;
         }
     }
 
     /// <summary>The files NoNpDrm and the console expect beside the package's own, as pkg2zip writes them.</summary>
-    private static async Task WriteExtrasAsync(PkgFile pkg, byte[]? rif, string root, CancellationToken ct)
+    private static async Task WriteExtrasAsync(PkgFile pkg, byte[]? rif, IVitaEntrySink sink, CancellationToken ct)
     {
         if (pkg.Kind == PkgContentKind.Psm)
         {
-            if (rif is not null)
-            {
-                Directory.CreateDirectory(Path.Combine(root, "RO", "License"));
-                await File.WriteAllBytesAsync(Path.Combine(root, "RO", "License", "FAKE.rif"), rif, ct);
-            }
-            foreach (var folder in new[] { "Documents", "Temp", "System" })
-                Directory.CreateDirectory(Path.Combine(root, "RW", folder));
+            if (rif is not null) await WriteAsync(sink, "RO/License/FAKE.rif", rif, ct);
+            foreach (var folder in new[] { "Documents", "Temp", "System" }) sink.CreateFolder("RW/" + folder);
             var contentId = new byte[0x30];
             Encoding.ASCII.GetBytes(pkg.Header.ContentId).CopyTo(contentId, 0);
-            await File.WriteAllBytesAsync(Path.Combine(root, "RW", "System", "content_id"), contentId, ct);
-            await File.WriteAllBytesAsync(Path.Combine(root, "RW", "System", "pm.dat"), new byte[0x10000], ct);
+            await WriteAsync(sink, "RW/System/content_id", contentId, ct);
+            await WriteAsync(sink, "RW/System/pm.dat", new byte[0x10000], ct);
             return;
         }
 
-        var package = Path.Combine(root, "sce_sys", "package");
-        Directory.CreateDirectory(package);
-        await using (var input = new FileStream(pkg.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous))
+        sink.CreateFolder("sce_sys/package");
+        using (var input = File.OpenHandle(pkg.Path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.Asynchronous))
         {
             // head.bin: everything up to the end of the item table; tail.bin: everything after the encrypted data.
             var headSize = (long)pkg.Header.DataOffset + pkg.ItemsSize;
-            await CopyRangeAsync(input, 0, headSize, Path.Combine(package, "head.bin"), ct);
+            await CopyRangeAsync(input, 0, headSize, sink, "sce_sys/package/head.bin", ct);
             var tailStart = (long)(pkg.Header.DataOffset + pkg.Header.DataSize);
-            await CopyRangeAsync(input, tailStart, Math.Max(0, pkg.Length - tailStart), Path.Combine(package, "tail.bin"), ct);
+            await CopyRangeAsync(input, tailStart, Math.Max(0, pkg.Length - tailStart), sink, "sce_sys/package/tail.bin", ct);
         }
-        await File.WriteAllBytesAsync(Path.Combine(package, "stat.bin"), new byte[768], ct);
-        if (rif is not null) await File.WriteAllBytesAsync(Path.Combine(package, "work.bin"), rif, ct);
+        await WriteAsync(sink, "sce_sys/package/stat.bin", new byte[768], ct);
+        if (rif is not null) await WriteAsync(sink, "sce_sys/package/work.bin", rif, ct);
     }
 
-    private static async Task CopyRangeAsync(FileStream input, long start, long length, string path, CancellationToken ct)
+    /// <summary>In a folder, extras replace a package file of the same name, as pkg2zip's do.</summary>
+    private static Stream CreateExtra(IVitaEntrySink sink, string path, long length)
+        => sink is FolderSink folder ? folder.ReplaceFile(path, length) : sink.CreateFile(path, length);
+
+    private static async Task WriteAsync(IVitaEntrySink sink, string path, byte[] data, CancellationToken ct)
     {
-        await using var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.Asynchronous);
+        await using var output = CreateExtra(sink, path, data.Length);
+        await output.WriteAsync(data, ct);
+    }
+
+    private static async Task CopyRangeAsync(SafeFileHandle input, long start, long length, IVitaEntrySink sink, string path, CancellationToken ct)
+    {
+        await using var output = CreateExtra(sink, path, length);
         var buffer = new byte[Math.Min(ChunkSize, Math.Max(1, length))];
-        input.Position = start;
         while (length > 0)
         {
             var size = (int)Math.Min(length, buffer.Length);
-            await input.ReadExactlyAsync(buffer.AsMemory(0, size), ct);
+            await ReadExactlyAsync(input, buffer.AsMemory(0, size), start, ct);
             await output.WriteAsync(buffer.AsMemory(0, size), ct);
+            start += size;
             length -= size;
         }
     }

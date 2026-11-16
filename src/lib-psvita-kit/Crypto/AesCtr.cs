@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Numerics;
 using System.Security.Cryptography;
 
 namespace LibPsVitaKit.Crypto;
@@ -9,31 +11,44 @@ namespace LibPsVitaKit.Crypto;
 /// </summary>
 internal static class AesCtr
 {
+    /// <summary>Key stream made per pass: small enough to stay in cache while it is XORed in.</summary>
+    private const int Window = 64 * 1024;
+
     /// <summary>XORs <paramref name="data"/> with the key stream starting at block <paramref name="block"/>.</summary>
     public static void Xor(Aes aes, ReadOnlySpan<byte> iv, ulong block, Span<byte> data)
     {
         if (data.IsEmpty) return;
-        var blocks = (data.Length + 15) / 16;
-        var counters = ArrayPool<byte>.Shared.Rent(blocks * 16);
-        var stream = ArrayPool<byte>.Shared.Rent(blocks * 16);
+        // UInt128 wraps at 2^128 just as the byte-wise big-endian add did.
+        var counter = BinaryPrimitives.ReadUInt128BigEndian(iv[..16]) + block;
+        var size = Math.Min(Window, (data.Length + 15) & ~15);
+        var rented = ArrayPool<byte>.Shared.Rent(size);
         try
         {
-            Span<byte> counter = stackalloc byte[16];
-            iv[..16].CopyTo(counter);
-            Add(counter, block);
-            for (var i = 0; i < blocks; i++)
+            while (!data.IsEmpty)
             {
-                counter.CopyTo(counters.AsSpan(i * 16));
-                Add(counter, 1);
+                var part = data[..Math.Min(Window, data.Length)];
+                var stream = rented.AsSpan(0, (part.Length + 15) & ~15);
+                for (var i = 0; i < stream.Length; i += 16) BinaryPrimitives.WriteUInt128BigEndian(stream[i..], counter++);
+                aes.EncryptEcb(stream, stream, PaddingMode.None); // in place: counters become key stream
+                XorInto(part, stream);
+                data = data[part.Length..];
             }
-            aes.EncryptEcb(counters.AsSpan(0, blocks * 16), stream.AsSpan(0, blocks * 16), PaddingMode.None);
-            for (var i = 0; i < data.Length; i++) data[i] ^= stream[i];
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(counters);
-            ArrayPool<byte>.Shared.Return(stream);
+            ArrayPool<byte>.Shared.Return(rented);
         }
+    }
+
+    private static void XorInto(Span<byte> data, ReadOnlySpan<byte> stream)
+    {
+        var i = 0;
+        if (Vector.IsHardwareAccelerated)
+        {
+            for (; i <= data.Length - Vector<byte>.Count; i += Vector<byte>.Count)
+                (new Vector<byte>(data[i..]) ^ new Vector<byte>(stream[i..])).CopyTo(data[i..]);
+        }
+        for (; i < data.Length; i++) data[i] ^= stream[i];
     }
 
     /// <summary>One AES-128-ECB block: how a package's key is made from its IV.</summary>
@@ -48,15 +63,5 @@ internal static class AesCtr
         var aes = Aes.Create();
         aes.Key = key.ToArray();
         return aes;
-    }
-
-    private static void Add(Span<byte> counter, ulong n)
-    {
-        for (var i = 15; i >= 0 && n != 0; i--)
-        {
-            n += counter[i];
-            counter[i] = (byte)n;
-            n >>= 8;
-        }
     }
 }

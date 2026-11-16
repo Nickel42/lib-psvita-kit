@@ -14,4 +14,9 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 - **`PkgFile`:** a package's kind, title, IDs and `param.sfo` without keys; `ReadItems` for its file list with the key. `VitaFile.Inspect` now shows a package's title and kind.
 - **`PkgKeys`:** the `pkg_vita_2/3/4` package keys. `PkgKeys.BuiltIn()` has all three and `new VitaConverter()` uses them; callers can set their own or load a text file, alone (`Load`) or over the built-in ones (`BuiltInWith`). `MissingKeyException` names a missing one.
 - **`psvita-kit` CLI:** `info`, `sfo`, `zrif` and `extract` commands; `extract` uses the built-in keys unless `--keys` gives a file.
+- **`IVitaEntrySink`:** `ExtractPkgAsync(PkgFile, zrif, sink)` unpacks into a caller's sink instead of a folder, so a package can go straight into a zip without a temporary folder. Same entries and bytes as the folder.
 - **Stub:** `Zrif.Encode` throws `NotImplementedException` until it's built.
+
+### Changed
+- **Faster unpacking:** AES-CTR builds its counters as one 128-bit number, encrypts them in place and XORs with vector instructions (about 4x the decrypt speed). `ExtractPkgAsync` reads the next 1 MiB while it decrypts and writes the last, reads by position with sequential-scan hints, allocates each file at its full size up front, and creates each folder once. `PkgFile.ReadItems` reads and decrypts all the names in one go. Output is unchanged.
+- **`ExtractPkgAsync(PkgFile, …)`:** takes a package already opened with `PkgFile.Open`, so callers that have one don't read its header again.

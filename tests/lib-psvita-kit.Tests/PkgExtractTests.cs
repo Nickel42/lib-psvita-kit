@@ -81,6 +81,103 @@ public sealed class PkgExtractTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenedPackage_WithLargeAndEmptyFiles_IsUnpackedExactly()
+    {
+        // 3.25 chunks: reads run ahead of the decrypt and write; the empty file has nothing to read.
+        var big = PkgBuilder.Pattern(3 * (1 << 20) + (1 << 18) + 5, 7);
+        var b = Game();
+        b.Items.Add(("data/big.psarc", big));
+        b.Items.Add(("data/empty.dat", []));
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "game.pkg")));
+
+        var result = await Converter().ExtractPkgAsync(pkg, ZrifVectors.VitaZrif, Out);
+
+        Assert.Equal(big, File.ReadAllBytes(Path.Combine(result.OutputPath, "data", "big.psarc")));
+        Assert.Empty(File.ReadAllBytes(Path.Combine(result.OutputPath, "data", "empty.dat")));
+        Assert.Equal(_eboot, File.ReadAllBytes(Path.Combine(result.OutputPath, "eboot.bin")));
+        Assert.Equal(b.Tail, File.ReadAllBytes(Path.Combine(result.OutputPath, "sce_sys", "package", "tail.bin")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Sink_GetsTheSameFilesAsTheFolder(bool psmPackage)
+    {
+        PkgBuilder b;
+        string zrif;
+        if (psmPackage)
+        {
+            b = new PkgBuilder { ContentId = PsmId, ContentType = 0x18 };
+            b.Items.Add(("content", null));
+            b.Items.Add(("content/Application", null));
+            b.Items.Add(("content/Application/app.exe", PkgBuilder.Pattern(5000, 4)));
+            zrif = ZrifVectors.PsmZrif;
+        }
+        else
+        {
+            b = Game();
+            b.Items.Add(("data/big.psarc", PkgBuilder.Pattern(2 * (1 << 20) + 17, 8)));
+            zrif = ZrifVectors.VitaZrif;
+        }
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "in.pkg")));
+        var folder = await Converter().ExtractPkgAsync(pkg, zrif, Out);
+        var sink = new MemorySink();
+
+        var result = await Converter().ExtractPkgAsync(pkg, zrif, sink);
+
+        Assert.Equal(Path.GetRelativePath(Out, folder.OutputPath).Replace('\\', '/'), result.OutputPath);
+        Assert.Equal((folder.Kind, folder.ContentId, folder.Licensed), (result.Kind, result.ContentId, result.Licensed));
+        var onDisk = Directory.GetFiles(folder.OutputPath, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(folder.OutputPath, f).Replace('\\', '/'), File.ReadAllBytes);
+        Assert.Equal(onDisk.Keys.Order(), sink.Files.Keys.Order());
+        foreach (var (name, bytes) in onDisk) Assert.Equal(bytes, sink.Files[name].ToArray());
+        foreach (var (name, length) in sink.Lengths) Assert.Equal(length, sink.Files[name].ToArray().Length);
+        var folders = Directory.GetDirectories(folder.OutputPath, "*", SearchOption.AllDirectories)
+            .Select(d => Path.GetRelativePath(folder.OutputPath, d).Replace('\\', '/'))
+            .Where(d => !onDisk.Keys.Any(f => f.StartsWith(d + "/", StringComparison.Ordinal)));
+        Assert.All(folders, d => Assert.Contains(d, sink.Folders)); // empty folders are passed on too
+    }
+
+    /// <summary>Keeps what an extraction writes in memory.</summary>
+    private sealed class MemorySink : IVitaEntrySink
+    {
+        public Dictionary<string, MemoryStream> Files { get; } = [];
+        public Dictionary<string, long> Lengths { get; } = [];
+        public HashSet<string> Folders { get; } = [];
+        public void CreateFolder(string path) => Folders.Add(path);
+        public Stream CreateFile(string path, long length)
+        {
+            Lengths[path] = length;
+            return Files[path] = new MemoryStream();
+        }
+    }
+
+    [Fact]
+    public async Task Sink_WriteFailure_WhileAReadIsAhead_Surfaces()
+    {
+        // The second 1 MiB chunk is being read ahead when the first write throws.
+        var b = Game();
+        b.Items.Add(("data/big.psarc", PkgBuilder.Pattern(3 * (1 << 20), 9)));
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "game.pkg")));
+
+        var e = await Assert.ThrowsAsync<IOException>(() => Converter().ExtractPkgAsync(pkg, ZrifVectors.VitaZrif, new FailingSink("data/big.psarc")));
+        Assert.Equal("disk full", e.Message);
+    }
+
+    /// <summary>Accepts every entry, but writing to <c>failOn</c> throws.</summary>
+    private sealed class FailingSink(string failOn) : IVitaEntrySink
+    {
+        public void CreateFolder(string path) { }
+        public Stream CreateFile(string path, long length) => path == failOn ? new FailingStream() : new MemoryStream();
+
+        private sealed class FailingStream : MemoryStream
+        {
+            public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) => throw new IOException("disk full");
+            public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => throw new IOException("disk full");
+        }
+    }
+
+    [Fact]
     public async Task Game_WithAnotherGamesZrif_IsRefused_AndLeavesNothing()
     {
         var pkg = Game().BuildTo(Path.Combine(_dir, "game.pkg"));
@@ -227,6 +324,31 @@ public sealed class PkgExtractTests : IDisposable
         var ours = (byte[])data.Clone();
         using (var aes = AesCtr.Create(key)) AesCtr.Xor(aes, iv, block, ours);
         Assert.Equal(PkgBuilder.CtrReference(key, iv, data, block), ours);
+    }
+
+    [Theory]
+    [InlineData("00000000000000FFFFFFFFFFFFFFFFF0", 0ul, 4_000)]       // carries from the low 64 bits into the high
+    [InlineData("A0A1A2A3A4A5A6A7A8A9AAABACADFFFE", 3ul, 200_003)]     // several 64 KiB key-stream windows and a ragged end
+    [InlineData("FFFFFFFFFFFFFFFFFFFFFFFFFFFFF000", 0ul, 1 << 20)]     // a whole chunk that wraps around 2^128
+    public void AesCtr_LongRuns_MatchTheReference(string ivHex, ulong block, int length)
+    {
+        var key = PkgBuilder.TestKeys[1];
+        var iv = Convert.FromHexString(ivHex);
+        var data = PkgBuilder.Pattern(length, 10);
+        var ours = (byte[])data.Clone();
+        using (var aes = AesCtr.Create(key)) AesCtr.Xor(aes, iv, block, ours);
+        Assert.Equal(PkgBuilder.CtrReference(key, iv, data, block), ours);
+    }
+
+    [Fact]
+    public void ReadItems_NamesReadTogetherOrOneByOne_Agree()
+    {
+        var pkg = PkgFile.Open(Game().BuildTo(Path.Combine(_dir, "game.pkg")));
+        var key = PkgBuilder.Keys().ContentKey(pkg.Header);
+        var together = pkg.ReadItems(key);
+        Assert.Equal(["sce_sys", "sce_sys/param.sfo", "sce_sys/package", "sce_sys/package/digs.bin", "eboot.bin", "data/level1.bin"],
+            together.Select(i => i.Name));
+        Assert.Equal(together, pkg.ReadItems(key, maxNameSpan: 0));
     }
 
     [Fact]

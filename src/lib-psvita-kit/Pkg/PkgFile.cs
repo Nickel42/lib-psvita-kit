@@ -33,13 +33,15 @@ public sealed record PkgItem(string Name, ulong NameOffset, ulong DataOffset, ul
 
 /// <summary>
 /// A PlayStation Store package: header, metadata and the unencrypted param.sfo copy. Reading
-/// these needs no keys; the item table and files (<see cref="ReadItems"/>) do.
+/// these needs no keys; the item table and files (<see cref="ReadItems(ReadOnlySpan{byte})"/>) do.
 /// </summary>
 public sealed class PkgFile
 {
     /// <summary>"\x7Fext": the extended header that follows the 0xC0-byte main header in Vita packages.</summary>
     private const uint ExtendedMagic = 0x7F657874;
     private const int MaxMetadataEntry = 0x1000, MaxSfoSize = 0x10000, ItemSize = 32;
+    /// <summary>Largest name area read in one piece; beyond this, names are read one by one.</summary>
+    private const ulong MaxNameSpan = 16 << 20;
 
     public required string Path { get; init; }
     public required long Length { get; init; }
@@ -118,7 +120,9 @@ public sealed class PkgFile
 
     /// <summary>Decrypts the item table and the items' names with the package's content key.</summary>
     /// <exception cref="VitaFormatException">An item points outside the file or has a name that isn't a safe relative path.</exception>
-    public IReadOnlyList<PkgItem> ReadItems(ReadOnlySpan<byte> contentKey)
+    public IReadOnlyList<PkgItem> ReadItems(ReadOnlySpan<byte> contentKey) => ReadItems(contentKey, MaxNameSpan);
+
+    internal IReadOnlyList<PkgItem> ReadItems(ReadOnlySpan<byte> contentKey, ulong maxNameSpan)
     {
         using var aes = AesCtr.Create(contentKey);
         using var fs = File.OpenRead(Path);
@@ -127,22 +131,49 @@ public sealed class PkgFile
         ReadAt(fs, enc + ItemsOffset, table);
         AesCtr.Xor(aes, Header.Iv, ItemsOffset / 16, table);
 
-        var items = new List<PkgItem>((int)Header.ItemCount);
-        for (var i = 0; i < Header.ItemCount; i++)
+        var entries = new (uint NameOffset, uint NameSize, ulong DataOffset, ulong DataSize, byte Flags)[Header.ItemCount];
+        ulong first = ulong.MaxValue, end = 0;
+        for (var i = 0; i < entries.Length; i++)
         {
             var e = table.AsSpan(i * ItemSize, ItemSize);
             var nameOffset = BinaryPrimitives.ReadUInt32BigEndian(e);
             var nameSize = BinaryPrimitives.ReadUInt32BigEndian(e[4..]);
             var dataOffset = BinaryPrimitives.ReadUInt64BigEndian(e[8..]);
             var dataSize = BinaryPrimitives.ReadUInt64BigEndian(e[16..]);
-            var flags = e[27];
             if (nameOffset % 16 != 0 || dataOffset % 16 != 0) throw new VitaFormatException($".pkg item {i} isn't 16-byte aligned; the key may be wrong.");
             if (nameSize is 0 or > 1024 || (ulong)enc + nameOffset + nameSize > (ulong)Length || (ulong)enc + dataOffset + dataSize > (ulong)Length)
                 throw new VitaFormatException($".pkg item {i} lies outside the file; the package is damaged or the key is wrong.");
-            var name = new byte[nameSize];
-            ReadAt(fs, enc + nameOffset, name);
-            AesCtr.Xor(aes, Header.Iv, nameOffset / 16, name);
-            items.Add(new PkgItem(CheckName(Encoding.UTF8.GetString(name).TrimEnd('\0'), i), nameOffset, dataOffset, dataSize, flags));
+            entries[i] = (nameOffset, nameSize, dataOffset, dataSize, e[27]);
+            first = Math.Min(first, nameOffset);
+            end = Math.Max(end, (ulong)nameOffset + nameSize);
+        }
+
+        // Names usually sit together after the table: read and decrypt them in one go, unless they're spread out.
+        byte[]? names = null;
+        if (entries.Length > 0 && end - first <= maxNameSpan)
+        {
+            names = new byte[end - first];
+            ReadAt(fs, enc + (long)first, names);
+            AesCtr.Xor(aes, Header.Iv, first / 16, names);
+        }
+        var items = new List<PkgItem>(entries.Length);
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var (nameOffset, nameSize, dataOffset, dataSize, flags) = entries[i];
+            byte[] name;
+            var start = 0;
+            if (names is not null)
+            {
+                (name, start) = (names, (int)(nameOffset - first));
+            }
+            else
+            {
+                name = new byte[nameSize];
+                ReadAt(fs, enc + nameOffset, name);
+                AesCtr.Xor(aes, Header.Iv, nameOffset / 16, name);
+            }
+            var text = Encoding.UTF8.GetString(name, start, (int)nameSize).TrimEnd('\0');
+            items.Add(new PkgItem(CheckName(text, i), nameOffset, dataOffset, dataSize, flags));
         }
         return items;
     }
