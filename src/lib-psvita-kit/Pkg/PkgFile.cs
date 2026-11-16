@@ -172,7 +172,7 @@ public sealed class PkgFile
                 ReadAt(fs, enc + nameOffset, name);
                 AesCtr.Xor(aes, Header.Iv, nameOffset / 16, name);
             }
-            var text = Encoding.UTF8.GetString(name, start, (int)nameSize).TrimEnd(' ');
+            var text = Encoding.UTF8.GetString(name, start, (int)nameSize).TrimEnd('\0');
             items.Add(new PkgItem(CheckName(text, i), nameOffset, dataOffset, dataSize, flags));
         }
         return items;
