@@ -81,6 +81,24 @@ public sealed class PkgExtractTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenedPackage_WithLargeAndEmptyFiles_IsUnpackedExactly()
+    {
+        // 3.25 chunks: reads run ahead of the decrypt and write; the empty file has nothing to read.
+        var big = PkgBuilder.Pattern(3 * (1 << 20) + (1 << 18) + 5, 7);
+        var b = Game();
+        b.Items.Add(("data/big.psarc", big));
+        b.Items.Add(("data/empty.dat", []));
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "game.pkg")));
+
+        var result = await Converter().ExtractPkgAsync(pkg, ZrifVectors.VitaZrif, Out);
+
+        Assert.Equal(big, File.ReadAllBytes(Path.Combine(result.OutputPath, "data", "big.psarc")));
+        Assert.Empty(File.ReadAllBytes(Path.Combine(result.OutputPath, "data", "empty.dat")));
+        Assert.Equal(_eboot, File.ReadAllBytes(Path.Combine(result.OutputPath, "eboot.bin")));
+        Assert.Equal(b.Tail, File.ReadAllBytes(Path.Combine(result.OutputPath, "sce_sys", "package", "tail.bin")));
+    }
+
+    [Fact]
     public async Task Game_WithAnotherGamesZrif_IsRefused_AndLeavesNothing()
     {
         var pkg = Game().BuildTo(Path.Combine(_dir, "game.pkg"));
