@@ -153,6 +153,31 @@ public sealed class PkgExtractTests : IDisposable
     }
 
     [Fact]
+    public async Task Sink_WriteFailure_WhileAReadIsAhead_Surfaces()
+    {
+        // The second 1 MiB chunk is being read ahead when the first write throws.
+        var b = Game();
+        b.Items.Add(("data/big.psarc", PkgBuilder.Pattern(3 * (1 << 20), 9)));
+        var pkg = PkgFile.Open(b.BuildTo(Path.Combine(_dir, "game.pkg")));
+
+        var e = await Assert.ThrowsAsync<IOException>(() => Converter().ExtractPkgAsync(pkg, ZrifVectors.VitaZrif, new FailingSink("data/big.psarc")));
+        Assert.Equal("disk full", e.Message);
+    }
+
+    /// <summary>Accepts every entry, but writing to <c>failOn</c> throws.</summary>
+    private sealed class FailingSink(string failOn) : IVitaEntrySink
+    {
+        public void CreateFolder(string path) { }
+        public Stream CreateFile(string path, long length) => path == failOn ? new FailingStream() : new MemoryStream();
+
+        private sealed class FailingStream : MemoryStream
+        {
+            public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) => throw new IOException("disk full");
+            public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => throw new IOException("disk full");
+        }
+    }
+
+    [Fact]
     public async Task Game_WithAnotherGamesZrif_IsRefused_AndLeavesNothing()
     {
         var pkg = Game().BuildTo(Path.Combine(_dir, "game.pkg"));
