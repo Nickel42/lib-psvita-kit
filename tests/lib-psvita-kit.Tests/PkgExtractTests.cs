@@ -244,6 +244,17 @@ public sealed class PkgExtractTests : IDisposable
     }
 
     [Fact]
+    public void ReadItems_NamesReadTogetherOrOneByOne_Agree()
+    {
+        var pkg = PkgFile.Open(Game().BuildTo(Path.Combine(_dir, "game.pkg")));
+        var key = PkgBuilder.Keys().ContentKey(pkg.Header);
+        var together = pkg.ReadItems(key);
+        Assert.Equal(["sce_sys", "sce_sys/param.sfo", "sce_sys/package", "sce_sys/package/digs.bin", "eboot.bin", "data/level1.bin"],
+            together.Select(i => i.Name));
+        Assert.Equal(together, pkg.ReadItems(key, maxNameSpan: 0));
+    }
+
+    [Fact]
     public void Keys_ParseFromText()
     {
         var keys = PkgKeys.Parse("# test\npkg_vita_2 = 00112233445566778899AABBCCDDEEF0\nPKG_VITA_4: f0e1d2c3 b4a59687 78695a4b 3c2d1e0f\nother = 12\n");
