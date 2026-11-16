@@ -229,6 +229,20 @@ public sealed class PkgExtractTests : IDisposable
         Assert.Equal(PkgBuilder.CtrReference(key, iv, data, block), ours);
     }
 
+    [Theory]
+    [InlineData("00000000000000FFFFFFFFFFFFFFFFF0", 0ul, 4_000)]       // carries from the low 64 bits into the high
+    [InlineData("A0A1A2A3A4A5A6A7A8A9AAABACADFFFE", 3ul, 200_003)]     // several 64 KiB key-stream windows and a ragged end
+    [InlineData("FFFFFFFFFFFFFFFFFFFFFFFFFFFFF000", 0ul, 1 << 20)]     // a whole chunk that wraps around 2^128
+    public void AesCtr_LongRuns_MatchTheReference(string ivHex, ulong block, int length)
+    {
+        var key = PkgBuilder.TestKeys[1];
+        var iv = Convert.FromHexString(ivHex);
+        var data = PkgBuilder.Pattern(length, 10);
+        var ours = (byte[])data.Clone();
+        using (var aes = AesCtr.Create(key)) AesCtr.Xor(aes, iv, block, ours);
+        Assert.Equal(PkgBuilder.CtrReference(key, iv, data, block), ours);
+    }
+
     [Fact]
     public void Keys_ParseFromText()
     {
